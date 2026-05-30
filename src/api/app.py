@@ -1,53 +1,3 @@
-# from fastapi import FastAPI
-# from pydantic import BaseModel
-# import pandas as pd
-# import joblib
-
-# # Create FastAPI app
-# app = FastAPI()
-
-# # Load trained model
-# model = joblib.load(
-#     'models/random_forest_model.pkl'
-# )
-
-# # Input schema
-# class WindFeatures(BaseModel):
-#     sar_mean: float
-#     sar_std: float
-#     sar_p25: float
-#     sar_p50: float
-#     sar_p75: float
-
-# # Home route
-# @app.get("/")
-# def home():
-#     return {
-#         "message": "Wind Estimation API Running"
-#     }
-
-# # Prediction route
-# @app.post("/predict")
-# def predict(features: WindFeatures):
-
-#     input_data = pd.DataFrame([{
-#         'sar_mean': features.sar_mean,
-#         'sar_std': features.sar_std,
-#         'sar_p25': features.sar_p25,
-#         'sar_p50': features.sar_p50,
-#         'sar_p75': features.sar_p75
-#     }])
-
-#     prediction = model.predict(input_data)[0]
-
-#     return {
-#         "predicted_wind_speed": round(
-#             float(prediction),
-#             3
-#         )
-#     }
-# this was basic api testing, now we build real submission stuff
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -60,6 +10,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import uuid
 import os
+
+import requests
+from PIL import Image
+from io import BytesIO
+
+from pyproj import aoi
 
 
 # Initialize Earth Engine
@@ -147,6 +103,18 @@ def predict(request: AOIRequest):
         # Average SAR image
         sar = sar_collection.mean()
 
+        # SAR visualization image
+        sar_thumb = sar.visualize(
+            min=-25,
+            max=-10,
+            palette=['000000', 'ffffff']
+        )
+
+        thumb_url = sar_thumb.getThumbURL({
+            'region': aoi,
+            'dimensions': 1024
+        })
+
         # Extract statistics
         sar_stats = sar.reduceRegion(
             reducer=(
@@ -196,39 +164,98 @@ def predict(request: AOIRequest):
             .mean()
         )
 
-        # Sample dense grid
-        samples = era5.sample(
-            region=aoi,
-            scale=10000,
-            geometries=True,
-            numPixels=200
-        ).getInfo()
+        # # Sample dense grid
+        # samples = era5.sample(
+        #     region=aoi,
+        #     scale=10000,
+        #     geometries=True,
+        #     numPixels=200
+        # ).getInfo()
+
+        # lats = []
+        # lons = []
+        # u_vals = []
+        # v_vals = []
+
+        # for feature in samples['features']:
+        
+        #     coords = feature['geometry']['coordinates']
+        #     props = feature['properties']
+
+        #     lon = coords[0]
+        #     lat = coords[1]
+
+        #     u = props.get('u_component_of_wind_10m')
+        #     v = props.get('v_component_of_wind_10m')
+
+        #     if u is None or v is None:
+        #         continue
+            
+        #     lons.append(lon)
+        #     lats.append(lat)
+        #     u_vals.append(u)
+        #     v_vals.append(v)
+        #instead of simple sampling we use structured grid now
+
+        # Create structured grid
+        num_points = 10
+
+        lon_values = np.linspace(
+            request.min_lon,
+            request.max_lon,
+            num_points
+        )
+
+        lat_values = np.linspace(
+            request.min_lat,
+            request.max_lat,
+            num_points
+        )
 
         lats = []
         lons = []
         u_vals = []
         v_vals = []
 
-        for feature in samples['features']:
-        
-            coords = feature['geometry']['coordinates']
-            props = feature['properties']
+        print("Generating structured wind grid...")
 
-            lon = coords[0]
-            lat = coords[1]
-
-            u = props.get('u_component_of_wind_10m')
-            v = props.get('v_component_of_wind_10m')
-
-            if u is None or v is None:
-                continue
+        for lat in lat_values:
+            print(f"Processing latitude {lat}")
+            for lon in lon_values:
             
-            lons.append(lon)
-            lats.append(lat)
-            u_vals.append(u)
-            v_vals.append(v)
+                point = ee.Geometry.Point([lon, lat])
+
+                values = era5.reduceRegion(
+                    reducer=ee.Reducer.mean(),
+                    geometry=point,
+                    scale=10000
+                ).getInfo()
+
+                u = values.get(
+                    'u_component_of_wind_10m'
+                )
+
+                v = values.get(
+                    'v_component_of_wind_10m'
+                )
+
+                if u is None or v is None:
+                    continue
+                
+                lats.append(lat)
+                lons.append(lon)
+
+                u_vals.append(u)
+                v_vals.append(v)
+
+        response = requests.get(thumb_url)
+        print("Generating SAR thumbnail...")
+        sar_image = Image.open(
+            BytesIO(response.content)
+        )
 
         # Generate figure
+        print("Generating wind field visualization...")
         #plt.figure(figsize=(8, 8))
 
         # plt.style.use('dark_background')
@@ -279,6 +306,33 @@ def predict(request: AOIRequest):
             np.array(u_vals)**2 +
             np.array(v_vals)**2
         )
+
+        ax.imshow(
+            sar_image,
+            extent=[
+                request.min_lon,
+                request.max_lon,
+                request.min_lat,
+                request.max_lat
+            ],
+            transform=ccrs.PlateCarree(),
+            alpha=0.75
+        )
+
+        # scatter = ax.scatter(
+        #     lons,
+        #     lats,
+        #     c=magnitude,
+        #     cmap='turbo',
+        #     s=40,
+        #     alpha=0.6,
+        #     transform=ccrs.PlateCarree()
+        # )
+
+        # plt.colorbar(
+        #     scatter,
+        #     label='Wind Speed Magnitude'
+        # )
 
         # Quiver plot
         quiver = ax.quiver(
