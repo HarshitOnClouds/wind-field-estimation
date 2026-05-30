@@ -1,4 +1,12 @@
-from cv2 import magnitude
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
+
+import numpy as np
+import uuid
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -6,25 +14,21 @@ from pydantic import BaseModel
 import pandas as pd
 import joblib
 import ee
-
-import matplotlib.pyplot as plt
-import numpy as np
-import uuid
-import os
-
 import requests
 from PIL import Image
 from io import BytesIO
-
-from pyproj import aoi
-
 from scipy.interpolate import griddata
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import traceback
+
 
 # Initialize Earth Engine
 ee.Initialize(project='wind-field-estimation-497821')
 
 # Create app
 app = FastAPI()
+os.makedirs('generated', exist_ok=True)
 
 app.mount(
     "/generated",
@@ -107,7 +111,7 @@ def predict(request: AOIRequest):
 
         # SAR visualization image
         sar_thumb = sar.visualize(
-            min=-22,
+            min=-20,
             max=-14,
             palette=['000000', 'ffffff']
         )
@@ -138,18 +142,21 @@ def predict(request: AOIRequest):
         ).getInfo()
 
         # Prepare features
-        input_data = pd.DataFrame([{
+        sar_values = {
             'sar_mean': sar_stats.get('VV_mean'),
             'sar_std': sar_stats.get('VV_stdDev'),
             'sar_p25': sar_stats.get('VV_p25'),
             'sar_p50': sar_stats.get('VV_p50'),
             'sar_p75': sar_stats.get('VV_p75')
-        }])
+        }
+
+        if any(v is None for v in sar_values.values()):
+            return {"error": f"Missing SAR features: {sar_values}"}
+
+        input_data = pd.DataFrame([sar_values])
 
         # Predict
-        prediction = model.predict(
-            input_data
-        )[0]
+        prediction = model.predict(input_data)[0]
 
         # ERA5 wind field
         era5 = (
@@ -166,41 +173,8 @@ def predict(request: AOIRequest):
             .mean()
         )
 
-        # # Sample dense grid
-        # samples = era5.sample(
-        #     region=aoi,
-        #     scale=10000,
-        #     geometries=True,
-        #     numPixels=200
-        # ).getInfo()
-
-        # lats = []
-        # lons = []
-        # u_vals = []
-        # v_vals = []
-
-        # for feature in samples['features']:
-        
-        #     coords = feature['geometry']['coordinates']
-        #     props = feature['properties']
-
-        #     lon = coords[0]
-        #     lat = coords[1]
-
-        #     u = props.get('u_component_of_wind_10m')
-        #     v = props.get('v_component_of_wind_10m')
-
-        #     if u is None or v is None:
-        #         continue
-            
-        #     lons.append(lon)
-        #     lats.append(lat)
-        #     u_vals.append(u)
-        #     v_vals.append(v)
-        #instead of simple sampling we use structured grid now
-
         # Create structured grid
-        num_points = 10
+        num_points = 6
 
         lon_values = np.linspace(
             request.min_lon,
@@ -214,43 +188,52 @@ def predict(request: AOIRequest):
             num_points
         )
 
+        u_grid = np.zeros((num_points, num_points))
+        v_grid = np.zeros((num_points, num_points))
+
+        print("Generating structured wind grid...")
+
+        # Build all points in one FeatureCollection
+        points = ee.FeatureCollection([
+            ee.Feature(ee.Geometry.Point([lon, lat]), {'i': i, 'j': j})
+            for i, lat in enumerate(lat_values)
+            for j, lon in enumerate(lon_values)
+        ])
+
+        # Single GEE call instead of 36
+        sampled = era5.reduceRegions(
+            collection=points,
+            reducer=ee.Reducer.mean(),
+            scale=10000
+        ).getInfo()
+
         lats = []
         lons = []
         u_vals = []
         v_vals = []
 
-        print("Generating structured wind grid...")
+        for feat in sampled['features']:
+            props = feat['properties']
+            coords = feat['geometry']['coordinates']
+            i = int(props['i'])
+            j = int(props['j'])
 
-        for lat in lat_values:
-            print(f"Processing latitude {lat}")
-            for lon in lon_values:
-            
-                point = ee.Geometry.Point([lon, lat])
+            u = props.get('u_component_of_wind_10m') or 0
+            v = props.get('v_component_of_wind_10m') or 0
 
-                values = era5.reduceRegion(
-                    reducer=ee.Reducer.mean(),
-                    geometry=point,
-                    scale=10000
-                ).getInfo()
+            u_grid[i, j] = u
+            v_grid[i, j] = v
 
-                u = values.get(
-                    'u_component_of_wind_10m'
-                )
+            lons.append(coords[0])
+            lats.append(coords[1])
+            u_vals.append(u)
+            v_vals.append(v)
 
-                v = values.get(
-                    'v_component_of_wind_10m'
-                )
+        print(f"Wind grid sampled: {len(lats)} points")
 
-                if u is None or v is None:
-                    continue
-                
-                lats.append(lat)
-                lons.append(lon)
+        response = requests.get(thumb_url, timeout=30)
+        response.raise_for_status()
 
-                u_vals.append(u)
-                v_vals.append(v)
-
-        response = requests.get(thumb_url)
         print("Generating SAR thumbnail...")
         sar_image = Image.open(
             BytesIO(response.content)
@@ -262,15 +245,15 @@ def predict(request: AOIRequest):
 
         # plt.style.use('dark_background')
 
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
 
         # Create map figure
         fig = plt.figure(figsize=(10, 10))
+        print('Figure created successfully')
 
         ax = plt.axes(
             projection=ccrs.PlateCarree()
         )
+        print('Axes created successfully')
 
         # Set AOI extent
         ax.set_extent([
@@ -279,12 +262,14 @@ def predict(request: AOIRequest):
             request.min_lat,
             request.max_lat
         ])
+        print('AOI extent set successfully')
 
         # Add map features
         ax.add_feature(
             cfeature.LAND,
             facecolor='#1e1e1e'
         )
+        print('features added successfully')
 
         ax.add_feature(
             cfeature.OCEAN,
@@ -328,22 +313,18 @@ def predict(request: AOIRequest):
             (lons, lats),
             magnitude,
             (grid_x, grid_y),
-            method='cubic'
+            method='linear'
         )
 
         grid_magnitude = np.ma.masked_invalid(
             grid_magnitude
         )
 
-        u_grid = np.array(u_vals).reshape(
-            num_points,
-            num_points
-        )
+        filled = grid_magnitude.filled(np.nan)
+        vmin = float(np.nanmin(filled))
+        vmax = float(np.nanmax(filled))
 
-        v_grid = np.array(v_vals).reshape(
-            num_points,
-            num_points
-        )
+        print(f"Wind speed range: {vmin:.2f} to {vmax:.2f} m/s")  # verify values in terminal
 
         ax.imshow(
             sar_image,
@@ -357,6 +338,7 @@ def predict(request: AOIRequest):
             alpha=0.35
         )
 
+        norm = Normalize(vmin=vmin, vmax=vmax)
 
         heatmap = ax.imshow(
             grid_magnitude,
@@ -367,10 +349,25 @@ def predict(request: AOIRequest):
                 request.max_lat
             ],
             origin='lower',
-            cmap='turbo',
-            alpha=0.45,
-            transform=ccrs.PlateCarree()
+            cmap='viridis',
+            alpha=0.40,
+            transform=ccrs.PlateCarree(),
+            norm = norm
         )
+
+        sm = ScalarMappable(cmap='viridis', norm=norm)
+        sm.set_array([])  # required for colorbar to read norm correctly
+
+        cbar = plt.colorbar(
+            sm,
+            ax=ax,
+            shrink=0.8,
+            pad=0.03
+        )
+
+        cbar.set_label('Wind Speed Magnitude (m/s)', color='white')
+        cbar.ax.tick_params(colors='white', labelsize=8)
+        cbar.outline.set_edgecolor('white')
 
         ax.streamplot(
             lon_values,
@@ -378,27 +375,10 @@ def predict(request: AOIRequest):
             u_grid,
             v_grid,
             color='white',
-            linewidth=0.8,
-            density=2,
+            linewidth=0.5,
+            density=1.8,
+            maxlength=1.2,
             transform=ccrs.PlateCarree()
-        )
-
-        # Quiver plot
-        quiver = ax.quiver(
-            lons,
-            lats,
-            u_vals,
-            v_vals,
-            magnitude,
-            cmap='cool',
-            transform=ccrs.PlateCarree(),
-            scale=120
-        )
-
-        # Colorbar
-        plt.colorbar(
-            quiver,
-            label='Wind Speed Magnitude'
         )
 
         # Title
@@ -416,18 +396,6 @@ def predict(request: AOIRequest):
         gl.top_labels = False
         gl.right_labels = False
 
-        # plt.quiver(
-        #     lons,
-        #     lats,
-        #     u_vals,
-        #     v_vals,
-        #     np.sqrt(np.array(u_vals)**2 + np.array(v_vals)**2),
-        #     cmap='cool'
-        # )
-
-        plt.title(
-            f'Wind Field - {request.date}'
-        )
 
         plt.xlabel('Longitude')
         plt.ylabel('Latitude')
@@ -450,7 +418,10 @@ def predict(request: AOIRequest):
 
         plt.close()
 
-        
+        print(f"Image saved to: {filepath}")
+        print(f"File exists: {os.path.exists(filepath)}")
+        print(f"File size: {os.path.getsize(filepath)} bytes")
+
         return {
             "predicted_wind_speed_mps": round(
                 float(prediction),
@@ -464,7 +435,7 @@ def predict(request: AOIRequest):
         
 
     except Exception as e:
-
+        print("FULL ERROR:", traceback.format_exc()) 
         return {
             "error": str(e)
         }
