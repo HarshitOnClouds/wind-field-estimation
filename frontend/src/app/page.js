@@ -15,11 +15,11 @@ export default function Home() {
 
   const handlePredict = async () => {
     if (!bounds) {
-      setError('Please select an Area of Interest on the map.')
+      setError('Select an area of interest on the map first.')
       return
     }
     if (!date) {
-      setError('Please select a date.')
+      setError('A date is required.')
       return
     }
 
@@ -30,9 +30,7 @@ export default function Home() {
     try {
       const response = await fetch('http://127.0.0.1:8000/predict', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           min_lon: bounds.min_lon,
           min_lat: bounds.min_lat,
@@ -42,9 +40,7 @@ export default function Home() {
         })
       })
 
-      if (!response.ok) {
-        throw new Error('Prediction request failed')
-      }
+      if (!response.ok) throw new Error('Prediction request failed')
 
       const data = await response.json()
       setResults(data)
@@ -56,100 +52,471 @@ export default function Home() {
   }
 
   return (
-    <main className="flex flex-row-reverse h-screen w-full bg-gray-100 text-gray-800">
-      {/* Side Panel */}
-      <div className="w-1/4 min-w-[300px] max-w-[400px] bg-white p-6 shadow-xl z-20 flex flex-col gap-6 overflow-y-auto">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Wind Field Estimator</h1>
-          <p className="text-sm text-gray-500 mt-1">Select an AOI directly on the map, pick a date, and estimate the wind field.</p>
-        </div>
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap');
 
-        <div className="flex flex-col gap-2">
-          <label className="font-semibold text-sm">Date</label>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="border border-gray-300 p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
-        <div className="flex flex-col gap-2">
-          <label className="font-semibold text-sm">Area of Interest (AOI)</label>
-          {bounds ? (
-            <div className="text-xs bg-gray-50 p-3 rounded-md border border-gray-200 grid grid-cols-2 gap-2">
-              <div><span className="text-gray-500">Min Lat:</span> {bounds.min_lat.toFixed(4)}</div>
-              <div><span className="text-gray-500">Max Lat:</span> {bounds.max_lat.toFixed(4)}</div>
-              <div><span className="text-gray-500">Min Lon:</span> {bounds.min_lon.toFixed(4)}</div>
-              <div><span className="text-gray-500">Max Lon:</span> {bounds.max_lon.toFixed(4)}</div>
+        body {
+          background: #080c10;
+          font-family: 'DM Sans', sans-serif;
+        }
+
+        .layout {
+          display: flex;
+          height: 100vh;
+          width: 100%;
+          overflow: hidden;
+        }
+
+        /* ── Panel ── */
+        .panel {
+          width: 320px;
+          flex-shrink: 0;
+          background: #0d1117;
+          border-right: 1px solid #1e2a38;
+          display: flex;
+          flex-direction: column;
+          z-index: 20;
+          overflow: hidden;
+        }
+
+        .panel-header {
+          padding: 28px 24px 20px;
+          border-bottom: 1px solid #1e2a38;
+        }
+
+        .panel-eyebrow {
+          font-family: 'Space Mono', monospace;
+          font-size: 10px;
+          letter-spacing: 0.18em;
+          text-transform: uppercase;
+          color: #2e7dcc;
+          margin-bottom: 8px;
+        }
+
+        .panel-title {
+          font-family: 'Space Mono', monospace;
+          font-size: 18px;
+          font-weight: 700;
+          color: #e8edf3;
+          line-height: 1.2;
+        }
+
+        .panel-sub {
+          font-size: 12px;
+          color: #4a5d70;
+          margin-top: 6px;
+          line-height: 1.5;
+        }
+
+        .panel-body {
+          flex: 1;
+          overflow-y: auto;
+          padding: 20px 24px;
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+          scrollbar-width: thin;
+          scrollbar-color: #1e2a38 transparent;
+        }
+        
+        .panel-body > * {
+          flex-shrink: 0;
+        }
+
+        /* ── Section label ── */
+        .field-label {
+          font-family: 'Space Mono', monospace;
+          font-size: 10px;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          color: #4a5d70;
+          margin-bottom: 8px;
+        }
+
+        /* ── Date input ── */
+        .date-input {
+          width: 100%;
+          background: #111820;
+          border: 1px solid #1e2a38;
+          border-radius: 4px;
+          padding: 10px 12px;
+          font-family: 'Space Mono', monospace;
+          font-size: 13px;
+          color: #c9d4de;
+          outline: none;
+          transition: border-color 0.15s;
+          color-scheme: dark;
+        }
+        .date-input:focus {
+          border-color: #2e7dcc;
+        }
+
+        /* ── AOI box ── */
+        .aoi-empty {
+          background: #111820;
+          border: 1px dashed #1e2a38;
+          border-radius: 4px;
+          padding: 14px 12px;
+          font-size: 12px;
+          color: #4a5d70;
+          line-height: 1.5;
+        }
+        .aoi-empty span {
+          color: #2e7dcc;
+        }
+
+        .aoi-grid {
+          background: #111820;
+          border: 1px solid #1e2a38;
+          border-radius: 4px;
+          padding: 12px;
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+        .aoi-cell {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .aoi-cell-label {
+          font-family: 'Space Mono', monospace;
+          font-size: 9px;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: #4a5d70;
+        }
+        .aoi-cell-value {
+          font-family: 'Space Mono', monospace;
+          font-size: 12px;
+          color: #7eb8f7;
+        }
+
+        /* ── Error ── */
+        .error-bar {
+          background: #1a0d0d;
+          border: 1px solid #5a1f1f;
+          border-radius: 4px;
+          padding: 10px 12px;
+          font-size: 12px;
+          color: #e07070;
+        }
+
+        /* ── Run button ── */
+        .run-btn {
+          width: 100%;
+          padding: 12px;
+          background: #2e7dcc;
+          border: none;
+          border-radius: 4px;
+          font-family: 'Space Mono', monospace;
+          font-size: 12px;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: #fff;
+          cursor: pointer;
+          transition: background 0.15s, opacity 0.15s;
+          position: relative;
+          overflow: hidden;
+        }
+        .run-btn:hover:not(:disabled) {
+          background: #3a8de0;
+        }
+        .run-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
+        .run-btn.loading::after {
+          content: '';
+          position: absolute;
+          bottom: 0; left: 0; right: 0;
+          height: 2px;
+          background: rgba(255,255,255,0.4);
+          animation: progress 1.4s ease-in-out infinite;
+        }
+        @keyframes progress {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
+        }
+
+        /* ── Results ── */
+        .results-divider {
+          border: none;
+          border-top: 1px solid #1e2a38;
+        }
+
+        .wind-speed-card {
+          background: #0a1626;
+          border: 1px solid #1b3150;
+          border-radius: 4px;
+          padding: 16px;
+        }
+        .wind-speed-label {
+          font-family: 'Space Mono', monospace;
+          font-size: 10px;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+          color: #2e7dcc;
+          margin-bottom: 8px;
+        }
+        .wind-speed-value {
+          font-family: 'Space Mono', monospace;
+          font-size: 34px;
+          font-weight: 700;
+          color: #7eb8f7;
+          line-height: 1;
+        }
+        .wind-speed-unit {
+          font-family: 'Space Mono', monospace;
+          font-size: 13px;
+          font-weight: 400;
+          color: #4a5d70;
+          margin-left: 4px;
+        }
+
+        .sar-card {
+          background: #111820;
+          border: 1px solid #1e2a38;
+          border-radius: 4px;
+          padding: 14px;
+        }
+        .sar-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 10px;
+        }
+        .sar-cell-label {
+          font-family: 'Space Mono', monospace;
+          font-size: 9px;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: #4a5d70;
+          margin-bottom: 2px;
+        }
+        .sar-cell-value {
+          font-family: 'Space Mono', monospace;
+          font-size: 13px;
+          color: #c9d4de;
+        }
+
+        .img-card {
+          background: #111820;
+          border: 1px solid #1e2a38;
+          border-radius: 4px;
+          overflow: hidden;
+          min-height: 180px;
+        }
+        .img-card-header {
+          padding: 8px 14px;
+          border-bottom: 1px solid #1e2a38;
+          font-family: 'Space Mono', monospace;
+          font-size: 10px;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          color: #4a5d70;
+        }
+        .img-card img {
+          display: block;
+          width: 100%;
+          min-height: 150px;
+          max-height: 240px;
+          object-fit: contain;
+          background: #080c10;
+        }
+
+        .vectors-note {
+          font-family: 'Space Mono', monospace;
+          font-size: 10px;
+          color: #2e3e50;
+          text-align: center;
+          padding-top: 4px;
+        }
+
+        /* ── Map ── */
+        .map-wrapper {
+          flex: 1;
+          position: relative;
+          overflow: hidden;
+        }
+
+        /* Scanline overlay on map for atmosphere */
+        .map-wrapper::after {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background: repeating-linear-gradient(
+            0deg,
+            transparent,
+            transparent 3px,
+            rgba(0,0,0,0.03) 3px,
+            rgba(0,0,0,0.03) 4px
+          );
+          pointer-events: none;
+          z-index: 10;
+        }
+
+        /* Corner HUD labels */
+        .hud-corner {
+          position: absolute;
+          z-index: 15;
+          pointer-events: none;
+        }
+        .hud-tl {
+          top: 20px;
+          left: 20px;
+        }
+        .hud-br {
+          bottom: 20px;
+          right: 20px;
+        }
+        .hud-label {
+          font-family: 'Space Mono', monospace;
+          font-size: 10px;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          color: rgba(46,125,204,0.6);
+          background: rgba(8,12,16,0.7);
+          padding: 4px 8px;
+          border: 1px solid rgba(30,42,56,0.8);
+          border-radius: 2px;
+          white-space: nowrap;
+        }
+      `}</style>
+
+      <div className="layout">
+        {/* ── Side Panel ── */}
+        <aside className="panel">
+          <div className="panel-header">
+            <p className="panel-eyebrow">SAR Analysis</p>
+            <h1 className="panel-title">Wind Field<br/>Estimator</h1>
+            <p className="panel-sub">Select an AOI on the map, pick a date, and run the prediction model.</p>
+          </div>
+
+          <div className="panel-body">
+            {/* Date */}
+            <div>
+              <p className="field-label">Acquisition date</p>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="date-input"
+              />
             </div>
-          ) : (
-            <div className="text-sm text-green-700 italic bg-green-50 p-3 rounded-md border border-green-200">
-              Click twice on the map to draw a bounding box.
+
+            {/* AOI */}
+            <div>
+              <p className="field-label">Area of interest</p>
+              {bounds ? (
+                <div className="aoi-grid">
+                  {[
+                    ['Min Lat', bounds.min_lat.toFixed(4)],
+                    ['Max Lat', bounds.max_lat.toFixed(4)],
+                    ['Min Lon', bounds.min_lon.toFixed(4)],
+                    ['Max Lon', bounds.max_lon.toFixed(4)],
+                  ].map(([label, val]) => (
+                    <div className="aoi-cell" key={label}>
+                      <span className="aoi-cell-label">{label}</span>
+                      <span className="aoi-cell-value">{val}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="aoi-empty">
+                  <span>Click twice on the map</span> to draw a bounding box.
+                </div>
+              )}
+            </div>
+
+            {/* Error */}
+            {error && <div className="error-bar">{error}</div>}
+
+            {/* Run */}
+            <button
+              onClick={handlePredict}
+              disabled={loading}
+              className={`run-btn${loading ? ' loading' : ''}`}
+            >
+              {loading ? 'Estimating…' : 'Run Prediction'}
+            </button>
+
+            {/* Results */}
+            {results && (
+              <>
+                <hr className="results-divider" />
+
+                <div className="wind-speed-card">
+                  <p className="wind-speed-label">Predicted wind speed</p>
+                  <div>
+                    <span className="wind-speed-value">
+                      {results.predicted_wind_speed_mps?.toFixed(2)}
+                    </span>
+                    <span className="wind-speed-unit">m/s</span>
+                  </div>
+                </div>
+
+                {results.sar_features && (
+                  <div className="sar-card">
+                    <p className="field-label">SAR features</p>
+                    <div className="sar-grid">
+                      {[
+                        ['Mean', results.sar_features.sar_mean],
+                        ['Std', results.sar_features.sar_std],
+                        ['P25', results.sar_features.sar_p25],
+                        ['P50', results.sar_features.sar_p50],
+                        ['P75', results.sar_features.sar_p75],
+                      ].map(([label, val]) => (
+                        <div key={label}>
+                          <p className="sar-cell-label">{label}</p>
+                          <p className="sar-cell-value">{val?.toFixed(3)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {results.generated_image && (
+                  <div className="img-card">
+                    <div className="img-card-header">Wind field plot</div>
+                    <img
+                      src={`http://127.0.0.1:8000/generated/${results.generated_image.split(/[\\/]/).pop()}`}
+                      alt="Wind Field Quiver Plot"
+                      onError={(e) => { e.target.style.outline = '1px solid red'; console.error('Image failed to load:', e.target.src); }}
+                    />
+                  </div>
+                )}
+
+                <p className="vectors-note">
+                  {results.wind_vectors?.length || 0} vectors rendered on map
+                </p>
+              </>
+            )}
+          </div>
+        </aside>
+
+        {/* ── Map ── */}
+        <div className="map-wrapper">
+          {/* HUD labels */}
+          <div className="hud-corner hud-tl">
+            <span className="hud-label">SAR · Wind Field · v1.0</span>
+          </div>
+          {bounds && (
+            <div className="hud-corner hud-br">
+              <span className="hud-label">
+                AOI {bounds.min_lat.toFixed(2)}°N {bounds.min_lon.toFixed(2)}°E
+                {' → '}
+                {bounds.max_lat.toFixed(2)}°N {bounds.max_lon.toFixed(2)}°E
+              </span>
             </div>
           )}
+
+          <MapView bounds={bounds} setBounds={setBounds} windVectors={results?.wind_vectors} />
         </div>
-
-        {error && <div className="text-red-600 text-sm">{error}</div>}
-
-        <button
-          onClick={handlePredict}
-          disabled={loading}
-          className={`py-2 px-4 rounded-md text-white font-medium transition-colors ${
-            loading ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
-          }`}
-        >
-          {loading ? 'Estimating...' : 'Get Prediction'}
-        </button>
-
-        {results && (
-          <div className="mt-4 flex flex-col gap-4 border-t pt-4 border-gray-200">
-            <h2 className="text-lg font-bold">Results</h2>
-            
-            <div className="bg-blue-50 border border-blue-100 p-3 rounded-md">
-              <div className="text-sm text-blue-800 font-semibold mb-1">Predicted Wind Speed</div>
-              <div className="text-2xl font-bold text-blue-900">
-                {results.predicted_wind_speed_mps?.toFixed(2)} <span className="text-base font-normal">m/s</span>
-              </div>
-            </div>
-
-            {results.sar_features && (
-              <div className="bg-gray-50 border border-gray-200 p-3 rounded-md">
-                <div className="text-sm font-semibold mb-2">SAR Features</div>
-                <div className="grid grid-cols-2 gap-y-2 text-xs">
-                  <div><span className="text-gray-500">Mean:</span> {results.sar_features.sar_mean?.toFixed(2)}</div>
-                  <div><span className="text-gray-500">Std:</span> {results.sar_features.sar_std?.toFixed(2)}</div>
-                  <div><span className="text-gray-500">P25:</span> {results.sar_features.sar_p25?.toFixed(2)}</div>
-                  <div><span className="text-gray-500">P50:</span> {results.sar_features.sar_p50?.toFixed(2)}</div>
-                  <div><span className="text-gray-500">P75:</span> {results.sar_features.sar_p75?.toFixed(2)}</div>
-                </div>
-              </div>
-            )}
-
-            {results.generated_image && (
-              <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
-                <div className="text-sm font-semibold p-2 bg-gray-50 border-b border-gray-200">Wind Field Plot</div>
-                <div className="flex justify-center p-2">
-                  <img 
-                    src={`http://127.0.0.1:8000/generated/${results.generated_image}`} 
-                    alt="Wind Field Quiver Plot" 
-                    className="max-h-40 w-auto object-contain"
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="text-xs text-gray-500 mt-2">
-              Viewing {results.wind_vectors?.length || 0} wind vectors on the map.
-            </div>
-          </div>
-        )}
       </div>
-
-      {/* Map Container */}
-      <div className="flex-1 w-3/4">
-        <MapView bounds={bounds} setBounds={setBounds} windVectors={results?.wind_vectors} />
-      </div>
-    </main>
+    </>
   )
 }

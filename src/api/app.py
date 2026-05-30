@@ -497,22 +497,33 @@ def predict(request: AOIRequest):
         # Save image
         filename = f"{uuid.uuid4()}.png"
 
-        filepath = os.path.join(
-            'generated',
-            filename
-        )
+        # filepath = os.path.join(
+        #     'generated',
+        #     filename
+        # )
 
-        plt.savefig(
-            filepath,
-            bbox_inches='tight',
-            dpi=200
-        )
+        # plt.savefig(
+        #     filepath,
+        #     bbox_inches='tight',
+        #     dpi=200
+        # )
+
+        # print(f"Image saved to: {filepath}")
+        # print(f"File exists: {os.path.exists(filepath)}")
+        # print(f"File size: {os.path.getsize(filepath)} bytes")
+        
+
+        
+        save_path = os.path.join("generated", filename)
+        plt.savefig(save_path)
+        
+        print(f"Image saved to: {save_path}")
+        print(f"File exists: {os.path.exists(save_path)}")
+        print(f"File size: {os.path.getsize(save_path)} bytes")
 
         plt.close()
 
-        print(f"Image saved to: {filepath}")
-        print(f"File exists: {os.path.exists(filepath)}")
-        print(f"File size: {os.path.getsize(filepath)} bytes")
+
 
         return {
             "predicted_wind_speed_mps": round(
