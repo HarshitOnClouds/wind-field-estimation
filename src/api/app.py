@@ -22,6 +22,21 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import traceback
 
+from shapely.geometry import Point
+from cartopy.io import shapereader
+from scipy.ndimage import gaussian_filter
+
+land_shp_fname = shapereader.natural_earth(
+    resolution='110m',
+    category='physical',
+    name='land'
+)
+
+land_geoms = list(
+    shapereader.Reader(
+        land_shp_fname
+    ).geometries()
+)
 
 # Initialize Earth Engine
 ee.Initialize(project='wind-field-estimation-497821')
@@ -300,12 +315,44 @@ def predict(request: AOIRequest):
             )
         )
 
+        # Ocean mask
+        ocean_mask = np.ones_like(
+            grid_x,
+            dtype=bool
+        )
+
+        for i in range(grid_x.shape[0]):
+        
+            for j in range(grid_x.shape[1]):
+            
+                point = Point(
+                    grid_x[i, j],
+                    grid_y[i, j]
+                )
+
+                for land in land_geoms:
+                
+                    if land.contains(point):
+                    
+                        ocean_mask[i, j] = False
+                        break
+
         # Interpolate wind magnitude
         grid_magnitude = griddata(
             (lons, lats),
             magnitude,
             (grid_x, grid_y),
             method='linear'
+        )
+        grid_magnitude = gaussian_filter(
+            grid_magnitude,
+            sigma=2
+        )
+
+        grid_magnitude = np.where(
+            ocean_mask,
+            grid_magnitude,
+            np.nan
         )
 
         grid_magnitude = np.ma.masked_invalid(
@@ -362,15 +409,67 @@ def predict(request: AOIRequest):
         cbar.ax.tick_params(colors='black', labelsize=8, width=1)
         cbar.outline.set_edgecolor('black')
 
+        vector_ocean_mask = np.ones(
+            (num_points, num_points),
+            dtype=bool
+        )
+
+        for i, lat in enumerate(lat_values):
+        
+            for j, lon in enumerate(lon_values):
+            
+                point = Point(lon, lat)
+
+                for land in land_geoms:
+                
+                    if land.contains(point):
+                    
+                        vector_ocean_mask[i, j] = False
+                        break
+                    
+        u_grid_masked = np.where(
+            vector_ocean_mask,
+            u_grid,
+            np.nan
+        )
+
+        v_grid_masked = np.where(
+            vector_ocean_mask,
+            v_grid,
+            np.nan
+        )
+
+        u_grid_masked = gaussian_filter(
+            np.nan_to_num(u_grid_masked),
+            sigma=1
+        )
+
+        v_grid_masked = gaussian_filter(
+            np.nan_to_num(v_grid_masked),
+            sigma=1
+        )
+
+        u_grid_masked = np.where(
+            vector_ocean_mask,
+            u_grid,
+            np.nan
+        )
+
+        v_grid_masked = np.where(
+            vector_ocean_mask,
+            v_grid,
+            np.nan
+        )
+
         ax.streamplot(
             lon_values,
             lat_values,
-            u_grid,
-            v_grid,
+            u_grid_masked,
+            v_grid_masked,
             color='black',
             linewidth=0.5,
-            density=0.8,
-            maxlength=0.8,
+            density=1.5,
+            maxlength=0.5,
             transform=ccrs.PlateCarree()
         )
 
