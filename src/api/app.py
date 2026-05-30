@@ -174,7 +174,7 @@ def predict(request: AOIRequest):
         )
 
         # Create structured grid
-        num_points = 6
+        num_points = 15
 
         lon_values = np.linspace(
             request.min_lon,
@@ -231,14 +231,6 @@ def predict(request: AOIRequest):
 
         print(f"Wind grid sampled: {len(lats)} points")
 
-        response = requests.get(thumb_url, timeout=30)
-        response.raise_for_status()
-
-        print("Generating SAR thumbnail...")
-        sar_image = Image.open(
-            BytesIO(response.content)
-        )
-
         # Generate figure
         print("Generating wind field visualization...")
         #plt.figure(figsize=(8, 8))
@@ -267,7 +259,7 @@ def predict(request: AOIRequest):
         # Add map features
         ax.add_feature(
             cfeature.LAND,
-            facecolor='#1e1e1e'
+            facecolor='#1a1a2e'
         )
         print('features added successfully')
 
@@ -326,17 +318,17 @@ def predict(request: AOIRequest):
 
         print(f"Wind speed range: {vmin:.2f} to {vmax:.2f} m/s")  # verify values in terminal
 
-        ax.imshow(
-            sar_image,
-            extent=[
-                request.min_lon,
-                request.max_lon,
-                request.min_lat,
-                request.max_lat
-            ],
-            transform=ccrs.PlateCarree(),
-            alpha=0.35
-        )
+        # ax.imshow(
+        #     sar_image,
+        #     extent=[
+        #         request.min_lon,
+        #         request.max_lon,
+        #         request.min_lat,
+        #         request.max_lat
+        #     ],
+        #     transform=ccrs.PlateCarree(),
+        #     alpha=0.35
+        # )
 
         norm = Normalize(vmin=vmin, vmax=vmax)
 
@@ -362,22 +354,23 @@ def predict(request: AOIRequest):
             sm,
             ax=ax,
             shrink=0.8,
-            pad=0.03
+            pad=0.03,
+            fraction=0.03
         )
 
-        cbar.set_label('Wind Speed Magnitude (m/s)', color='white')
-        cbar.ax.tick_params(colors='white', labelsize=8)
-        cbar.outline.set_edgecolor('white')
+        cbar.set_label('Wind Speed Magnitude (m/s)', color='black', fontsize=10, labelpad=10)
+        cbar.ax.tick_params(colors='black', labelsize=8, width=1)
+        cbar.outline.set_edgecolor('black')
 
         ax.streamplot(
             lon_values,
             lat_values,
             u_grid,
             v_grid,
-            color='white',
+            color='black',
             linewidth=0.5,
-            density=1.8,
-            maxlength=1.2,
+            density=0.8,
+            maxlength=0.8,
             transform=ccrs.PlateCarree()
         )
 
