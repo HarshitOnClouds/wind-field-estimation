@@ -49,16 +49,38 @@
 # this was basic api testing, now we build real submission stuff
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import pandas as pd
 import joblib
 import ee
+
+import matplotlib.pyplot as plt
+import numpy as np
+import uuid
+import os
+
 
 # Initialize Earth Engine
 ee.Initialize(project='wind-field-estimation-497821')
 
 # Create app
 app = FastAPI()
+
+app.mount(
+    "/generated",
+    StaticFiles(directory="generated"),
+    name="generated"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Load trained model
 model = joblib.load(
@@ -159,9 +181,9 @@ def predict(request: AOIRequest):
             input_data
         )[0]
 
-        # ERA5 wind data
+        # ERA5 wind field
         era5 = (
-            ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY')
+            ee.ImageCollection('ECMWF/ERA5/HOURLY')
             .filterBounds(aoi)
             .filterDate(
                 request.date,
@@ -174,32 +196,158 @@ def predict(request: AOIRequest):
             .mean()
         )
 
-        # Sample vectors
+        # Sample dense grid
         samples = era5.sample(
             region=aoi,
-            scale=20000,
+            scale=10000,
             geometries=True,
-            numPixels=10
+            numPixels=200
         ).getInfo()
 
-        wind_vectors = []
+        lats = []
+        lons = []
+        u_vals = []
+        v_vals = []
 
         for feature in samples['features']:
         
             coords = feature['geometry']['coordinates']
             props = feature['properties']
 
-            wind_vectors.append({
-                "lon": coords[0],
-                "lat": coords[1],
-                "u": props.get(
-                    'u_component_of_wind_10m'
-                ),
-                "v": props.get(
-                    'v_component_of_wind_10m'
-                )
-            })
+            lon = coords[0]
+            lat = coords[1]
 
+            u = props.get('u_component_of_wind_10m')
+            v = props.get('v_component_of_wind_10m')
+
+            if u is None or v is None:
+                continue
+            
+            lons.append(lon)
+            lats.append(lat)
+            u_vals.append(u)
+            v_vals.append(v)
+
+        # Generate figure
+        #plt.figure(figsize=(8, 8))
+
+        # plt.style.use('dark_background')
+
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+
+        # Create map figure
+        fig = plt.figure(figsize=(10, 10))
+
+        ax = plt.axes(
+            projection=ccrs.PlateCarree()
+        )
+
+        # Set AOI extent
+        ax.set_extent([
+            request.min_lon,
+            request.max_lon,
+            request.min_lat,
+            request.max_lat
+        ])
+
+        # Add map features
+        ax.add_feature(
+            cfeature.LAND,
+            facecolor='#1e1e1e'
+        )
+
+        ax.add_feature(
+            cfeature.OCEAN,
+            facecolor='#0b1f33'
+        )
+
+        ax.add_feature(
+            cfeature.COASTLINE,
+            edgecolor='white',
+            linewidth=0.8
+        )
+
+        ax.add_feature(
+            cfeature.BORDERS,
+            edgecolor='gray',
+            linewidth=0.3
+        )
+
+        # Wind magnitude
+        magnitude = np.sqrt(
+            np.array(u_vals)**2 +
+            np.array(v_vals)**2
+        )
+
+        # Quiver plot
+        quiver = ax.quiver(
+            lons,
+            lats,
+            u_vals,
+            v_vals,
+            magnitude,
+            cmap='cool',
+            transform=ccrs.PlateCarree(),
+            scale=120
+        )
+
+        # Colorbar
+        plt.colorbar(
+            quiver,
+            label='Wind Speed Magnitude'
+        )
+
+        # Title
+        plt.title(
+            f'ERA5 Wind Field\n{request.date}',
+            fontsize=14
+        )
+
+        # Gridlines
+        gl = ax.gridlines(
+            draw_labels=True,
+            alpha=0.2
+        )
+
+        gl.top_labels = False
+        gl.right_labels = False
+
+        plt.quiver(
+            lons,
+            lats,
+            u_vals,
+            v_vals,
+            np.sqrt(np.array(u_vals)**2 + np.array(v_vals)**2),
+            cmap='cool'
+        )
+
+        plt.title(
+            f'Wind Field - {request.date}'
+        )
+
+        plt.xlabel('Longitude')
+        plt.ylabel('Latitude')
+
+        plt.grid(alpha=0.2)
+
+        # Save image
+        filename = f"{uuid.uuid4()}.png"
+
+        filepath = os.path.join(
+            'generated',
+            filename
+        )
+
+        plt.savefig(
+            filepath,
+            bbox_inches='tight',
+            dpi=200
+        )
+
+        plt.close()
+
+        
         return {
             "predicted_wind_speed_mps": round(
                 float(prediction),
@@ -208,8 +356,9 @@ def predict(request: AOIRequest):
             "sar_features": input_data.to_dict(
                 orient='records'
             )[0],
-            "wind_vectors": wind_vectors
+            "generated_image": filename
         }
+        
 
     except Exception as e:
 
