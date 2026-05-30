@@ -1,3 +1,4 @@
+from cv2 import magnitude
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +18,7 @@ from io import BytesIO
 
 from pyproj import aoi
 
+from scipy.interpolate import griddata
 
 # Initialize Earth Engine
 ee.Initialize(project='wind-field-estimation-497821')
@@ -105,8 +107,8 @@ def predict(request: AOIRequest):
 
         # SAR visualization image
         sar_thumb = sar.visualize(
-            min=-25,
-            max=-10,
+            min=-22,
+            max=-14,
             palette=['000000', 'ffffff']
         )
 
@@ -307,6 +309,42 @@ def predict(request: AOIRequest):
             np.array(v_vals)**2
         )
 
+        # Create interpolation grid
+        grid_x, grid_y = np.meshgrid(
+            np.linspace(
+                request.min_lon,
+                request.max_lon,
+                200
+            ),
+            np.linspace(
+                request.min_lat,
+                request.max_lat,
+                200
+            )
+        )
+
+        # Interpolate wind magnitude
+        grid_magnitude = griddata(
+            (lons, lats),
+            magnitude,
+            (grid_x, grid_y),
+            method='cubic'
+        )
+
+        grid_magnitude = np.ma.masked_invalid(
+            grid_magnitude
+        )
+
+        u_grid = np.array(u_vals).reshape(
+            num_points,
+            num_points
+        )
+
+        v_grid = np.array(v_vals).reshape(
+            num_points,
+            num_points
+        )
+
         ax.imshow(
             sar_image,
             extent=[
@@ -316,23 +354,34 @@ def predict(request: AOIRequest):
                 request.max_lat
             ],
             transform=ccrs.PlateCarree(),
-            alpha=0.75
+            alpha=0.35
         )
 
-        # scatter = ax.scatter(
-        #     lons,
-        #     lats,
-        #     c=magnitude,
-        #     cmap='turbo',
-        #     s=40,
-        #     alpha=0.6,
-        #     transform=ccrs.PlateCarree()
-        # )
 
-        # plt.colorbar(
-        #     scatter,
-        #     label='Wind Speed Magnitude'
-        # )
+        heatmap = ax.imshow(
+            grid_magnitude,
+            extent=[
+                request.min_lon,
+                request.max_lon,
+                request.min_lat,
+                request.max_lat
+            ],
+            origin='lower',
+            cmap='turbo',
+            alpha=0.45,
+            transform=ccrs.PlateCarree()
+        )
+
+        ax.streamplot(
+            lon_values,
+            lat_values,
+            u_grid,
+            v_grid,
+            color='white',
+            linewidth=0.8,
+            density=2,
+            transform=ccrs.PlateCarree()
+        )
 
         # Quiver plot
         quiver = ax.quiver(
@@ -367,14 +416,14 @@ def predict(request: AOIRequest):
         gl.top_labels = False
         gl.right_labels = False
 
-        plt.quiver(
-            lons,
-            lats,
-            u_vals,
-            v_vals,
-            np.sqrt(np.array(u_vals)**2 + np.array(v_vals)**2),
-            cmap='cool'
-        )
+        # plt.quiver(
+        #     lons,
+        #     lats,
+        #     u_vals,
+        #     v_vals,
+        #     np.sqrt(np.array(u_vals)**2 + np.array(v_vals)**2),
+        #     cmap='cool'
+        # )
 
         plt.title(
             f'Wind Field - {request.date}'
